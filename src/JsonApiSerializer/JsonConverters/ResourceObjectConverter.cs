@@ -1,4 +1,4 @@
-﻿using JsonApiSerializer.ContractResolvers;
+using JsonApiSerializer.ContractResolvers;
 using JsonApiSerializer.ContractResolvers.Contracts;
 using JsonApiSerializer.Exceptions;
 using JsonApiSerializer.JsonApi;
@@ -95,15 +95,65 @@ namespace JsonApiSerializer.JsonConverters
                 //flatten out attributes onto the object
                 if (!successfullyPopulateProperty && propName == PropertyNames.Attributes)
                 {
-                    foreach (var innerPropName in ReaderUtil.IterateProperties(reader))
+					// AH 2020-08-27 - store unknown Attributes in this dictionary.
+					Dictionary<string, object> extraAttributes = new Dictionary<string, object>();
+					JsonProperty extraAttributesProperty = contract.Properties.GetClosestMatchProperty("extraAttributes");
+
+
+					foreach (var innerPropName in ReaderUtil.IterateProperties(reader))
                     {
-                        ReaderUtil.TryPopulateProperty(
-                           serializer,
-                           existingValue,
-                           contract.Properties.GetClosestMatchProperty(innerPropName),
-                           reader);
+						JsonProperty matchedProperty = contract.Properties.GetClosestMatchProperty(innerPropName);
+
+						// regular behavior
+						if (matchedProperty != null)
+						{
+							ReaderUtil.TryPopulateProperty(
+							   serializer,
+							   existingValue,
+							   matchedProperty,//contract.Properties.GetClosestMatchProperty(innerPropName),
+							   reader);
+						}
+						// modified behavior - store any unknown custom attributes into an extraAttributes collection
+						else if (extraAttributesProperty != null)
+						{
+							object extraAttributeValue = null;
+							
+							// this is a Custom Attribute or an Attribute that is a list
+							if (reader.TokenType == JsonToken.StartArray)
+							{
+								JArray jarr = JArray.Load(reader);
+								if (jarr.Count != 0)
+								{
+									// if we have an object it's a custom attribute.
+									if (jarr[0].Type == JTokenType.Object)
+									{
+										JObject jobj = jarr[0].ToObject<JObject>();
+										extraAttributeValue = jobj;
+									}
+									//otherwise the array itself is the value for the attribute (like entity_types.entity_attributes)
+									else
+									{
+										extraAttributeValue = jarr;
+									}
+								}
+								// don't read here. Next iteration expects us to be at the end of array/object
+								//reader.Read();
+							}
+							// It's a regular Attribute that we don't expect. Just store it's value.
+							else
+							{
+								extraAttributeValue = reader.Value;
+							}
+							extraAttributes[innerPropName] = extraAttributeValue;
+						}
                     }
-                }
+					
+					if (extraAttributesProperty != null)
+					{
+						extraAttributesProperty.ValueProvider.SetValue(existingValue, extraAttributes);
+					}
+
+				}
 
                 //flatten out relationships onto the object
                 if (!successfullyPopulateProperty && propName == PropertyNames.Relationships)
